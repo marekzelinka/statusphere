@@ -35,8 +35,8 @@ const STATUS_OPTIONS = [
 ];
 
 type Props = {
-  statuses: Status[];
-  didHandleMap: Record<string, string>;
+  statuses?: Status[];
+  didHandleMap?: Record<string, string>;
   profile?: { displayName?: string };
   myStatus?: Status;
 };
@@ -88,8 +88,8 @@ function content({ statuses, didHandleMap, profile, myStatus }: Props) {
             </button>`,
         )}
       </form>
-      ${statuses.map((status, i) => {
-        const handle = didHandleMap[status.authorDid] || status.authorDid;
+      ${(statuses || []).map((status, i) => {
+        const handle = didHandleMap?.[status.authorDid] || status.authorDid;
         const date = ts(status);
         return html`
           <div class=${i === 0 ? "status-line no-line" : "status-line"}>
