@@ -1,5 +1,5 @@
 import type { Status } from "#/db";
-import { html } from "../lib/view";
+import { html } from "#/lib/view";
 import { shell } from "./shell";
 
 const TODAY = new Date().toDateString();
