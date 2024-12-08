@@ -1,10 +1,3 @@
-import type { OAuthClient } from "@atproto/oauth-client-node";
-import { Firehose } from "@atproto/sync";
-import express, { type Express } from "express";
-import events from "node:events";
-import type http from "node:http";
-import { pino } from "pino";
-
 import { createClient } from "#/auth/client";
 import type { Database } from "#/db";
 import { createDb, migrateToLatest } from "#/db";
@@ -13,14 +6,19 @@ import {
   createBidirectionalResolver,
   createIdResolver,
 } from "#/id-resolver";
-import { createIngester } from "#/ingester";
+import { createIngester, type Jetstream } from "#/ingester";
 import { env } from "#/lib/env";
 import { createRouter } from "#/routes";
+import type { OAuthClient } from "@atproto/oauth-client-node";
+import express, { type Express } from "express";
+import events from "node:events";
+import type http from "node:http";
+import { pino } from "pino";
 
 // Application state passed to the router and elsewhere
 export type AppContext = {
   db: Database;
-  ingester: Firehose;
+  ingester: Jetstream;
   logger: pino.Logger;
   oauthClient: OAuthClient;
   resolver: BidirectionalResolver;
@@ -44,7 +42,7 @@ export class Server {
     // Create the atproto utilities
     const oauthClient = await createClient(db);
     const baseIdResolver = createIdResolver();
-    const ingester = createIngester(db, baseIdResolver);
+    const ingester = createIngester(db);
     const resolver = createBidirectionalResolver(baseIdResolver);
     const ctx = {
       db,

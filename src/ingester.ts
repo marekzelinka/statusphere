@@ -1,59 +1,120 @@
 import type { Database } from "#/db";
 import * as Status from "#/lexicon/types/xyz/statusphere/status";
-import { IdResolver } from "@atproto/identity";
-import { Firehose } from "@atproto/sync";
 import pino from "pino";
+import WebSocket from "ws";
 
-export function createIngester(db: Database, idResolver: IdResolver) {
-  const logger = pino({ name: "firehose ingestion" });
-  return new Firehose({
-    idResolver,
+export function createIngester(db: Database) {
+  const logger = pino({ name: "websocket ingestion" });
+
+  return new Jetstream({
+    db,
     handleEvent: async (evt) => {
-      // Watch for write events
-      if (evt.event === "create" || evt.event === "update") {
-        const now = new Date();
-        const record = evt.record;
+      const now = new Date();
+      const record = evt.commit?.record;
 
-        // If the write is a valid status update
-        if (
-          evt.collection === "xyz.statusphere.status" &&
-          Status.isRecord(record) &&
-          Status.validateRecord(record).success
-        ) {
-          // Store the status in our SQLite
-          await db
-            .insertInto("status")
-            .values({
-              uri: evt.uri.toString(),
-              authorDid: evt.did,
-              status: record.status,
-              createdAt: record.createdAt,
-              indexedAt: now.toISOString(),
-            })
-            .onConflict((oc) =>
-              oc.column("uri").doUpdateSet({
-                status: record.status,
-                indexedAt: now.toISOString(),
-              }),
-            )
-            .execute();
-        }
-      } else if (
-        evt.event === "delete" &&
-        evt.collection === "xyz.statusphere.status"
+      if (
+        (evt.commit?.operation === "create" ||
+          evt.commit?.operation === "update") &&
+        evt.commit?.collection === "xyz.statusphere.status" &&
+        Status.isRecord(record) &&
+        Status.validateRecord(record).success
       ) {
-        // Remove the status from our SQLite
+        await db
+          .insertInto("status")
+          .values({
+            uri: evt.commit.rkey,
+            authorDid: evt.did,
+            status: record.status,
+            createdAt: record.createdAt,
+            indexedAt: now.toISOString(),
+          })
+          .onConflict((oc) =>
+            oc.column("uri").doUpdateSet({
+              status: record.status,
+              indexedAt: now.toISOString(),
+            }),
+          )
+          .execute();
+      } else if (
+        evt.commit?.operation === "delete" &&
+        evt.commit?.collection === "xyz.statusphere.status"
+      ) {
         await db
           .deleteFrom("status")
-          .where("uri", "=", evt.uri.toString())
+          .where("uri", "=", evt.commit.rkey)
           .execute();
       }
     },
     onError: (err) => {
-      logger.error({ err }, "error on firehose ingestion");
+      logger.error({ err }, "error during WebSocket ingestion");
     },
-    filterCollections: ["xyz.statusphere.status"],
-    excludeIdentity: true,
-    excludeAccount: true,
+    wantedCollections: ["xyz.statusphere.status"],
   });
+}
+
+export class Jetstream {
+  private db: Database;
+  private handleEvent: (evt: any) => Promise<void>;
+  private onError: (err: any) => void;
+  private ws?: WebSocket;
+  private isStarted = false;
+  private wantedCollections: string[];
+
+  constructor({
+    db,
+    handleEvent,
+    onError,
+    wantedCollections,
+  }: {
+    db: Database;
+    handleEvent: (evt: any) => Promise<void>;
+    onError: (err: any) => void;
+    wantedCollections: string[];
+  }) {
+    this.db = db;
+    this.handleEvent = handleEvent;
+    this.onError = onError;
+    this.wantedCollections = wantedCollections;
+  }
+
+  constructUrlWithQuery = (): string => {
+    const params = new URLSearchParams();
+    params.append("wantedCollections", this.wantedCollections.join(","));
+    return `wss://jetstream2.us-east.bsky.network/subscribe?${params.toString()}`;
+  };
+
+  start() {
+    if (this.isStarted) return;
+    this.isStarted = true;
+    this.ws = new WebSocket(this.constructUrlWithQuery());
+
+    this.ws.on("open", () => {
+      console.log("WebSocket connection opened.");
+    });
+
+    this.ws.on("message", async (data) => {
+      try {
+        const event = JSON.parse(data.toString());
+        await this.handleEvent(event);
+      } catch (err) {
+        this.onError(err);
+      }
+    });
+
+    this.ws.on("error", (err) => {
+      this.onError(err);
+    });
+
+    this.ws.on("close", (code, reason) => {
+      console.log(`WebSocket closed. Code: ${code}, Reason: ${reason}`);
+      this.isStarted = false;
+    });
+  }
+
+  destroy() {
+    if (this.ws) {
+      this.ws.close();
+      this.isStarted = false;
+    }
+  }
 }
